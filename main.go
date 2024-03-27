@@ -6,10 +6,6 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/external"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/schollz/progressbar/v2"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -17,6 +13,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/external"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/schollz/progressbar/v2"
 )
 
 // represents the duration from making an S3 GetObject request to getting the first byte and last byte
@@ -134,9 +135,9 @@ func parseFlags() {
 	fullArg := flag.Bool("full", false, "Runs the full exhaustive test, and overrides the threads and payload arguments.")
 	throttlingModeArg := flag.Bool("throttling-mode", false, "Runs a continuous test to find out when EC2 network throttling kicks in.")
 	cleanupArg := flag.Bool("cleanup", false, "Cleans all the objects uploaded to S3 for this test.")
-	csvResultsArg := flag.String("upload-csv", "", "Uploads the test results to S3 as a CSV file.")
+	csvResultsArg := flag.String("write-csv", "", "Writes the test results to disk as a CSV file.")
 	createBucketArg := flag.Bool("create-bucket", true, "Create the bucket")
-	
+
 	// parse the arguments and set all the global variables accordingly
 	flag.Parse()
 
@@ -227,7 +228,7 @@ func setup() {
 			},
 		})
 
-		// AWS S3 has this peculiar issue in which if you want to create bucket in us-east-1 region, you should NOT specify 
+		// AWS S3 has this peculiar issue in which if you want to create bucket in us-east-1 region, you should NOT specify
 		// any location constraint. https://github.com/boto/boto3/issues/125
 		if strings.ToLower(region) == "us-east-1" {
 			createBucketReq = s3Client.CreateBucketRequest(&s3.CreateBucketInput{
@@ -240,7 +241,7 @@ func setup() {
 		// if the error is because the bucket already exists, ignore the error
 		if err != nil && !strings.Contains(err.Error(), "BucketAlreadyOwnedByYou:") {
 			panic("Failed to create S3 bucket: " + err.Error())
-		}	
+		}
 	}
 
 	// an object size iterator that starts from 1 KB and doubles the size on every iteration
@@ -344,30 +345,36 @@ func runBenchmark() {
 		fmt.Print("+---------+----------------+------------------------------------------------+------------------------------------------------+\n\n")
 	}
 
-	// if the csv option is true, upload the csv results to S3
+	// if the csv option is true, write the csv results to disk
 	if csvResults != "" {
 		b := &bytes.Buffer{}
 		w := csv.NewWriter(b)
 		_ = w.WriteAll(csvRecords)
 
-		// create the s3 key based on the prefix argument and instance type
-		key := "results/" + csvResults + "-" + instanceType
+		// Open the file for writing
+		file, errs := os.Create(csvResults)
+		if errs != nil {
+			panic(fmt.Errorf("failed to create file:", errs))
+		}
+		defer file.Close()
 
-		// do the PutObject request
-		putReq := s3Client.PutObjectRequest(&s3.PutObjectInput{
-			Bucket: aws.String(bucketName),
-			Key:    &key,
-			Body:   bytes.NewReader(b.Bytes()),
-		})
+		_, err := file.Write(b.Bytes())
 
-		_, err := putReq.Send()
+		// // do the PutObject request
+		// putReq := s3Client.PutObjectRequest(&s3.PutObjectInput{
+		// 	Bucket: aws.String(bucketName),
+		// 	Key:    &key,
+		// 	Body:   bytes.NewReader(b.Bytes()),
+		// })
+
+		// _, err := putReq.Send()
 
 		// if the request fails, exit
 		if err != nil {
-			panic("Failed to put object: " + err.Error())
+			panic("Failed to write results " + err.Error())
 		}
 
-		fmt.Printf("CSV results uploaded to \033[1;33ms3://%s/%s\033[0m\n", bucketName, key)
+		fmt.Printf("CSV results saved to %+s \n", csvResults)
 	}
 }
 
